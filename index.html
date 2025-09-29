@@ -3,30 +3,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Matrix Factorization Movie Recommender</title>
+    <title>Movie Recommender - Matrix Factorization</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
-        <h1>Matrix Factorization Movie Recommender</h1>
-        <div class="controls">
-            <div class="form-group">
-                <label for="user-select">Select User:</label>
-                <select id="user-select">
-                    <option value="">Loading users...</option>
-                </select>
+        <header>
+            <h1>🎬 Movie Recommender</h1>
+            <p>Matrix Factorization with TensorFlow.js</p>
+        </header>
+
+        <main>
+            <div class="controls">
+                <div class="input-group">
+                    <label for="user-select">Select User:</label>
+                    <select id="user-select">
+                        <option value="">Loading users...</option>
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label for="movie-select">Select Movie:</label>
+                    <select id="movie-select">
+                        <option value="">Loading movies...</option>
+                    </select>
+                </div>
+
+                <button id="predict-btn" onclick="predictRating()" disabled>
+                    Predict Rating
+                </button>
             </div>
-            <div class="form-group">
-                <label for="movie-select">Select Movie:</label>
-                <select id="movie-select">
-                    <option value="">Loading movies...</option>
-                </select>
+
+            <div id="result" class="result">
+                <p>Loading data and training model... This may take a minute.</p>
             </div>
-            <button id="predict-btn" onclick="predictRating()" disabled>Predict Rating</button>
-        </div>
-        <div id="result" class="result">Loading data and training model...</div>
+
+            <div id="training-status" class="training-status">
+                <div class="status-text">Initializing...</div>
+                <div class="progress-bar">
+                    <div class="progress-fill"></div>
+                </div>
+            </div>
+        </main>
     </div>
 
+    <!-- Load TensorFlow.js -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <script src="data.js"></script>
     <script src="script.js"></script>
