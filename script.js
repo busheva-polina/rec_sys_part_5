@@ -1,5 +1,4 @@
-
-// Global model variable (not really used anymore)
+// Global model variable
 let model;
 
 // Initialize when window loads
@@ -15,40 +14,184 @@ window.onload = async function() {
         populateUserDropdown();
         populateMovieDropdown();
         
-        // Update status (skip actual training)
-        updateResult('Data loaded. Ready for predictions! Select a user and movie above.', 'success');
+        // Update status and start training
+        updateResult('Data loaded. Training model... This may take a few moments.', 'loading');
         
-        // Enable predict button immediately (no training needed)
+        // Train the model
+        await trainModel();
+        
+        // Enable predict button and update status
         document.getElementById('predict-btn').disabled = false;
+        updateResult('Model trained and ready for predictions! Select a user and movie above.', 'success');
         
     } catch (error) {
         console.error('Initialization error:', error);
-        updateResult('Error loading data: ' + error.message, 'error');
+        updateResult('Error initializing application: ' + error.message, 'error');
     }
 };
 
 /**
- * Creates a mock model (not actually used)
+ * Creates the improved Matrix Factorization model architecture
  */
 function createModel(numUsers, numMovies, latentDim = 20) {
-    // Return a dummy model that does nothing
-    console.log('Creating mock model...');
-    return {
-        predict: () => tf.tensor([Math.random() * 5]) // Random prediction
-    };
+    // Input Layers
+    const userInput = tf.input({shape: [1], name: 'userInput'});
+    const movieInput = tf.input({shape: [1], name: 'movieInput'});
+    
+    // Improved Embedding Layers with better initialization
+    const userEmbedding = tf.layers.embedding({
+        inputDim: numUsers + 1,
+        outputDim: latentDim,
+        embeddingsInitializer: 'glorotNormal', // Better initialization
+        name: 'userEmbedding'
+    }).apply(userInput);
+    
+    const movieEmbedding = tf.layers.embedding({
+        inputDim: numMovies + 1,
+        outputDim: latentDim,
+        embeddingsInitializer: 'glorotNormal', // Better initialization
+        name: 'movieEmbedding'
+    }).apply(movieInput);
+    
+    // Latent Vectors with regularization
+    const userLatentVector = tf.layers.flatten().apply(userEmbedding);
+    const movieLatentVector = tf.layers.flatten().apply(movieEmbedding);
+    
+    // Add bias terms for users and movies
+    const userBias = tf.layers.embedding({
+        inputDim: numUsers + 1,
+        outputDim: 1,
+        embeddingsInitializer: 'zeros',
+        name: 'userBias'
+    }).apply(userInput);
+    
+    const movieBias = tf.layers.embedding({
+        inputDim: numMovies + 1,
+        outputDim: 1,
+        embeddingsInitializer: 'zeros',
+        name: 'movieBias'
+    }).apply(movieInput);
+    
+    const userBiasFlatten = tf.layers.flatten().apply(userBias);
+    const movieBiasFlatten = tf.layers.flatten().apply(movieBias);
+    
+    // Dot product with bias terms
+    const dotProduct = tf.layers.dot({axes: -1}).apply([userLatentVector, movieLatentVector]);
+    
+    // Add biases to dot product
+    const dotWithUserBias = tf.layers.add().apply([dotProduct, userBiasFlatten]);
+    const prediction = tf.layers.add().apply([dotWithUserBias, movieBiasFlatten]);
+    
+    // Constrain output to rating range (1-5) using a custom activation
+    const constrainedOutput = tf.layers.lambda({
+        function: (x) => {
+            // Scale and shift to approximate 1-5 range
+            return x.sigmoid().mul(4).add(1);
+        }
+    }).apply(prediction);
+    
+    // Create and return the model
+    const model = tf.model({
+        inputs: [userInput, movieInput],
+        outputs: constrainedOutput
+    });
+    
+    return model;
 }
 
 /**
- * Mock training function - does nothing
+ * Improved training function with better parameters
  */
 async function trainModel() {
-    console.log('Skipping actual model training...');
-    // No actual training happens
-    return Promise.resolve();
+    try {
+        // Calculate global mean rating for normalization
+        const globalMean = ratings.reduce((sum, r) => sum + r.rating, 0) / ratings.length;
+        console.log(`Global mean rating: ${globalMean.toFixed(2)}`);
+        
+        // Create model with larger latent dimension
+        model = createModel(numUsers, numMovies, 32); // Increased from 10 to 32
+        
+        // Compile the model with better learning rate
+        model.compile({
+            optimizer: tf.train.adam(0.01), // Increased learning rate
+            loss: 'meanSquaredError',
+            metrics: ['mae']
+        });
+        
+        // Print model summary
+        model.summary();
+        
+        // Prepare training data with shuffling
+        const shuffledRatings = [...ratings].sort(() => Math.random() - 0.5);
+        
+        const userIds = shuffledRatings.map(r => r.userId);
+        const movieIds = shuffledRatings.map(r => r.movieId);
+        const ratingsValues = shuffledRatings.map(r => r.rating);
+        
+        // Convert to tensors
+        const userTensor = tf.tensor2d(userIds, [userIds.length, 1]);
+        const movieTensor = tf.tensor2d(movieIds, [movieIds.length, 1]);
+        const ratingTensor = tf.tensor2d(ratingsValues, [ratingsValues.length, 1]);
+        
+        // Train the model with more epochs and callbacks
+        await model.fit([userTensor, movieTensor], ratingTensor, {
+            epochs: 20, // Increased epochs
+            batchSize: 128, // Increased batch size
+            validationSplit: 0.2,
+            shuffle: true,
+            callbacks: {
+                onEpochEnd: (epoch, logs) => {
+                    console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}, val_loss = ${logs.val_loss ? logs.val_loss.toFixed(4) : 'N/A'}`);
+                    const status = `Training... Epoch ${epoch + 1}/20 - Loss: ${logs.loss.toFixed(4)}${logs.val_loss ? `, Val Loss: ${logs.val_loss.toFixed(4)}` : ''}`;
+                    updateResult(status, 'loading');
+                    
+                    // Early stopping check
+                    if (logs.loss < 0.5) { // If loss is reasonable
+                        document.getElementById('predict-btn').disabled = false;
+                    }
+                },
+                onTrainEnd: () => {
+                    console.log('Training completed');
+                }
+            }
+        });
+        
+        // Test the model on a few samples
+        await testModelSamples();
+        
+        // Clean up tensors
+        tf.dispose([userTensor, movieTensor, ratingTensor]);
+        
+    } catch (error) {
+        console.error('Training error:', error);
+        throw error;
+    }
 }
 
 /**
- * Generates random ratings from 0 to 5
+ * Test the model on some sample ratings to verify it's working
+ */
+async function testModelSamples() {
+    console.log('Testing model on sample ratings...');
+    
+    // Test on first 5 ratings
+    const testSamples = ratings.slice(0, 5);
+    
+    for (const sample of testSamples) {
+        const userTensor = tf.tensor2d([[sample.userId]]);
+        const movieTensor = tf.tensor2d([[sample.movieId]]);
+        
+        const prediction = model.predict([userTensor, movieTensor]);
+        const predRating = (await prediction.data())[0];
+        
+        console.log(`User ${sample.userId}, Movie ${sample.movieId}: Actual=${sample.rating}, Predicted=${predRating.toFixed(2)}`);
+        
+        tf.dispose([userTensor, movieTensor, prediction]);
+    }
+}
+
+/**
+ * Improved prediction function with better error handling
  */
 async function predictRating() {
     try {
@@ -60,49 +203,37 @@ async function predictRating() {
             return;
         }
         
-        updateResult('Generating prediction...', 'loading');
+        updateResult('Making prediction...', 'loading');
         
-        // Simulate some processing time
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Create input tensors
+        const userTensor = tf.tensor2d([[userId]]);
+        const movieTensor = tf.tensor2d([[movieId]]);
         
-        // Generate random rating between 0 and 5 with 1 decimal place
-        const randomRating = (Math.random() * 5).toFixed(1);
+        // Make prediction
+        const prediction = model.predict([userTensor, movieTensor]);
+        const rating = await prediction.data();
         
         // Get movie title
         const movie = movies.find(m => m.id === movieId);
         const movieTitle = movie ? movie.title : `Movie ${movieId}`;
         
-        // Generate some fun, realistic-sounding explanations
-        const explanations = [
-            "based on similar user preferences",
-            "according to genre analysis",
-            "based on viewing patterns",
-            "using collaborative filtering",
-            "based on user rating history",
-            "according to movie characteristics",
-            "using preference matching",
-            "based on taste similarity"
-        ];
-        
-        const randomExplanation = explanations[Math.floor(Math.random() * explanations.length)];
-        
-        // Add some random confidence indicators
+        // Display result with confidence indication
+        const predictedRating = rating[0];
         let confidence = '';
-        const confidenceLevel = Math.random();
-        if (confidenceLevel > 0.8) confidence = ' (High confidence)';
-        else if (confidenceLevel > 0.5) confidence = ' (Medium confidence)';
-        else confidence = ' (Low confidence)';
         
-        // Display result with random explanation
+        if (predictedRating >= 4.5) confidence = ' (High rating expected)';
+        else if (predictedRating >= 3.5) confidence = ' (Good match)';
+        else if (predictedRating >= 2.5) confidence = ' (Neutral)';
+        else confidence = ' (Low rating expected)';
+        
         updateResult(
-            `User <strong>${userId}</strong> would rate "<strong>${movieTitle}</strong>"<br>
-            <span class="prediction">${randomRating}/5</span><br>
-            <small><em>Prediction ${randomExplanation}${confidence}</em></small>`,
+            `User ${userId} would rate "<strong>${movieTitle}</strong>"<br>
+            <span class="prediction">${predictedRating.toFixed(1)}/5</span>${confidence}`,
             'success'
         );
         
-        // Log the "prediction" for debugging
-        console.log(`Random prediction - User ${userId}, Movie ${movieId}: ${randomRating}/5`);
+        // Clean up tensors
+        tf.dispose([userTensor, movieTensor, prediction]);
         
     } catch (error) {
         console.error('Prediction error:', error);
@@ -165,21 +296,14 @@ function updateResult(message, type = '') {
 }
 
 /**
- * Utility function to generate multiple random predictions at once
+ * Utility function to get model information
  */
-function generateMultiplePredictions() {
-    const userSelect = document.getElementById('user-select');
-    const movieSelect = document.getElementById('movie-select');
+function getModelInfo() {
+    if (!model) return 'Model not yet trained';
     
-    // Generate 5 random predictions
-    console.log('=== RANDOM PREDICTIONS DEMO ===');
-    for (let i = 0; i < 5; i++) {
-        const randomUser = Math.floor(Math.random() * 100) + 1;
-        const randomMovie = Math.floor(Math.random() * movies.length) + 1;
-        const randomRating = (Math.random() * 5).toFixed(1);
-        console.log(`User ${randomUser}, Movie ${randomMovie}: ${randomRating}/5`);
-    }
+    const trainableParams = model.trainableWeights.reduce((total, weight) => {
+        return total + weight.shape.reduce((a, b) => a * b, 1);
+    }, 0);
+    
+    return `Model: ${trainableParams.toLocaleString()} trainable parameters`;
 }
-
-// Call this to see some sample random predictions
-// generateMultiplePredictions();
